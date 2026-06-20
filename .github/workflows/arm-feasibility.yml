@@ -1,0 +1,70 @@
+name: ARM64 CKKS Feasibility Sweep Option 2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64-feasibility:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Machine info
+        run: |
+          uname -a
+          uname -m
+          lscpu | head -30
+          free -h
+          docker --version
+
+      - name: Build ARM64 TenSEAL image from source
+        run: |
+          docker build -f Dockerfile.arm64 -t arm-he:latest .
+
+      - name: Capped feasibility sweep
+        run: |
+          set +e
+          echo "cap_mb,target,exit_code" > sweep_index.csv
+
+          run_capped () {
+            CAP_MB="$1"
+            TARGET="$2"
+            echo "=== cap=${CAP_MB}MB target=${TARGET} ==="
+
+            docker run --rm --memory="${CAP_MB}m" --memory-swap="${CAP_MB}m" \
+              -e PROBE="${TARGET}" arm-he:latest \
+              | tee -a sweep_raw.jsonl
+
+            CODE=${PIPESTATUS[0]}
+            echo "${CAP_MB},${TARGET},${CODE}" >> sweep_index.csv
+            echo "exit_code=${CODE} ; 137 usually means OOM-killed under the memory cap"
+          }
+
+          run_capped 256 paillier
+
+          for CAP in 256 350 512 1024 2048; do
+            for N in 4096 8192 16384; do
+              run_capped "${CAP}" "ckks:${N}"
+            done
+          done
+
+          docker run --rm -e PROBE=all arm-he:latest | tee uncapped.jsonl
+
+          echo "----- sweep_index.csv -----"
+          cat sweep_index.csv
+
+      - name: Upload feasibility artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-feasibility-results
+          path: |
+            sweep_raw.jsonl
+            sweep_index.csv
+            uncapped.jsonl
+          retention-days: 30
