@@ -1,0 +1,23 @@
+# ARM64 image with TenSEAL built from source (the pip wheel is missing for aarch64).
+# Build once; the feasibility sweep then runs this image under different --memory caps.
+FROM arm64v8/python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --upgrade pip setuptools wheel
+RUN python -m pip install numpy pandas psutil phe
+
+# TenSEAL from source (pulls and builds Microsoft SEAL). This is the step that
+# fails as a pip wheel on aarch64; building it here makes CKKS available on ARM.
+RUN python -m pip install --no-binary :all: tenseal || \
+    pip install "git+https://github.com/OpenMined/TenSEAL.git@main"
+
+# sanity check at build time (fail early if CKKS is not importable)
+RUN python -c "import tenseal as ts; ctx=ts.context(ts.SCHEME_TYPE.CKKS, poly_modulus_degree=4096, coeff_mod_bit_sizes=[40,20,40]); print('TenSEAL OK on', __import__('platform').machine())"
+
+WORKDIR /work
+COPY feasibility_probe.py /work/feasibility_probe.py
+ENTRYPOINT ["python", "/work/feasibility_probe.py"]
